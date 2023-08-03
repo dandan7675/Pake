@@ -1,63 +1,31 @@
-import fs from 'fs/promises';
-import path from 'path';
-import prompts from 'prompts';
-import { checkRustInstalled, installRust } from '@/helpers/rust.js';
-import { PakeAppOptions } from '@/types.js';
-import { IBuilder } from './base.js';
-import { shellExec } from '@/utils/shell.js';
-// @ts-expect-error 加上resolveJsonModule rollup会打包报错
-// import tauriConf from '../../src-tauri/tauri.macos.conf.json';
-import tauriConf from './tauriConf.js';
-import log from 'loglevel';
-import { mergeTauriConfig } from './common.js';
-import { npmDirectory } from '@/utils/dir.js';
-import logger from '@/options/logger.js';
+import tauriConfig from '@/helpers/tauriConfig';
+import { PakeAppOptions } from '@/types';
+import BaseBuilder from './BaseBuilder';
 
-export default class MacBuilder implements IBuilder {
-  async prepare() {
-    if (checkRustInstalled()) {
-      return;
-    }
+export default class MacBuilder extends BaseBuilder {
+  constructor(options: PakeAppOptions) {
+    super(options);
+    this.options.targets = 'dmg';
+  }
 
-    const res = await prompts({
-      type: 'confirm',
-      message: 'We detected that you have not installed Rust. Install it now?',
-      name: 'value',
-    });
-
-    if (res.value) {
-      // TODO 国内有可能会超时
-      await installRust();
+  getFileName(): string {
+    const { name } = this.options;
+    let arch: string;
+    if (this.options.multiArch) {
+      arch = 'universal';
     } else {
-      log.error('Error: Pake need Rust to package your webapp!');
-      process.exit(2);
+      arch = process.arch === 'arm64' ? 'aarch64' : process.arch;
     }
+    return `${name}_${tauriConfig.package.version}_${arch}`;
   }
 
-  async build(url: string, options: PakeAppOptions) {
-    log.debug('PakeAppOptions', options);
-    const { name } = options;
-
-    await mergeTauriConfig(url, options, tauriConf);
-
-    //这里直接使用 universal-apple-darwin 的打包，而非当前系统的包
-    await shellExec(`cd ${npmDirectory} && npm install && npm run build:mac`);
-
-    const dmgName = `${name}_${tauriConf.package.version}_universal.dmg`;
-    const appPath = this.getBuildAppPath(npmDirectory, dmgName);
-    const distPath = path.resolve(`${name}.dmg`);
-    await fs.copyFile(appPath, distPath);
-    await fs.unlink(appPath);
-
-    logger.success('Build success!');
-    logger.success('You can find the app installer in', distPath);
+  protected getBuildCommand(): string {
+    return this.options.multiArch ? 'npm run build:mac' : super.getBuildCommand();
   }
 
-  getBuildAppPath(npmDirectory: string, dmgName: string) {
-    return path.join(
-      npmDirectory,
-      'src-tauri/target/universal-apple-darwin/release/bundle/dmg',
-      dmgName
-    );
+  protected getBasePath(): string {
+    return this.options.multiArch
+      ? 'src-tauri/target/universal-apple-darwin/release/bundle'
+      : super.getBasePath();
   }
 }
